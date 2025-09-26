@@ -31,6 +31,10 @@ constexpr double Q_B = 0.9; // Queue Up threshold -> Load Balancing
 constexpr int MAX_THREADS = 4;
 constexpr int SLO_THRESHOLD_MS = 5;
 constexpr int SCHEDULING_TICK = 16;
+constexpr int NUM_SHARDS = MAX_THREADS; // 1:1 시작(스레드=샤드)
+struct Route { std::atomic<int> owner; std::atomic<uint64_t> epoch; };
+Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
+
 // 실험 종료를 알리는 전역변수
 std::atomic<bool> g_stop{false};
 
@@ -882,6 +886,11 @@ int main()
         thread_list[i].join();
     }
 
+    for (int s = 0; s < NUM_SHARDS; ++s) {
+        route_tbl[s].owner.store(s, std::memory_order_relaxed); // 샤드 s의 오너 = 스레드 s
+        route_tbl[s].epoch.store(0, std::memory_order_relaxed);
+    }
+
     printf("Start\n");
     const int coro_count = 10;  // 워커 코루틴 수
     const int num_thread = 2;   // 워커 스레드 수
@@ -949,6 +958,9 @@ void timed_producer(int num_thread, int qps, int durationSec)
                            clock::now().time_since_epoch())
                            .count();
         // [당신의 현재 g_rx는 mutex 기반이라 실패 반환이 없음]
+        int shard = r.key % NUM_SHARDS;
+        int owner = route_tbl[shard].owner.load(std::memory_order_acquire);
+
         g_rx.push(std::move(r));
 
         // 다음 발사 시각까지 대기 (드리프트 최소화)

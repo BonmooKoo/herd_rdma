@@ -81,8 +81,7 @@ void* run_master(void* arg) {
   }
 
   /*
-   * Wait until the sun rises in the west and sets in the east. Until the
-   * rivers run dry, and the mountains blow in the wind like leaves...
+   * BM : Fixed Master for scheduling
    */
   printf("main: Master sleeping\n");
   sleep(1000000);
