@@ -151,9 +151,11 @@ void* run_client(void* arg) {
 
     if (nb_tx % WINDOW_SIZE == 0 && nb_tx > 0) {
       hrd_poll_cq(cb->dgram_recv_cq[0], WINDOW_SIZE, wc);
+      //클라이언트가 서버에 보냈던 WINDOW_SIZE 갯수의 요청들에 대해 몇개의 응답이 도착하였는가?
+
     }
 
-    wn = hrd_fastrand(&seed) % NUM_WORKERS; /* Choose a worker */
+    wn = hrd_fastrand(&seed) % MAX_THREADS; /* Choose a worker */
     int is_update = (hrd_fastrand(&seed) % 100 < update_percentage) ? 1 : 0;
 
     /* Forge the HERD request */
@@ -175,6 +177,9 @@ void* run_client(void* arg) {
     wr.send_flags = (nb_tx & UNSIG_BATCH_) == 0 ? IBV_SEND_SIGNALED : 0;
     if ((nb_tx & UNSIG_BATCH_) == UNSIG_BATCH_) {
       hrd_poll_cq(cb->conn_cq[0], 1, wc);
+      //클라이언트가 서버에 RDMA_WRITE로 보낸 request에 대한 polling.
+      //UNSIG_BATCH를 사용해서 모든 request에 대해 polling을 하지 않고, 일정 갯수의 request를 batching 해서 파악한다.
+      
     }
     wr.send_flags |= IBV_SEND_INLINE;
 
