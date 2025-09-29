@@ -1,7 +1,22 @@
-#include "main.h"
-#include <getopt.h>
+#include <iostream>
+#include <thread>
+#include <atomic>
+
+extern "C" {
 #include "hrd.h"
+#include "main.h"
 #include "mica.h"
+}
+#include "scheduler_defs.h"
+
+struct mica_kv kv_instances[NUM_WORKERS]; // KV index to save actual KV
+Route route_tbl[NUM_SHARDS];              // Shard where client write thier request by RDMA Write
+std::atomic<bool> g_stop{false};          // for test
+
+// 코루틴 스케줄러 스레드 함수 프로토타입
+void* run_worker(void* arg);
+void timed_producer(int num_thread, int qps, int durationSec); // (참고용) Request 생성자
+
 
 int main(int argc, char* argv[]) {
   /* Use small queues to reduce cache pressure */
@@ -101,14 +116,17 @@ int main(int argc, char* argv[]) {
     assert(machine_id >= 0);
     assert(update_percentage >= 0 && update_percentage <= 100);
     assert(postlist == -1); /* Client postlist = NUM_WORKERS */
-  } else {
-    /* Server does not need to know number of client ports */
-    assert(num_threads == -1); /* Number of server threads is fixed */
+  } else {//is_client == 0
     num_threads = NUM_WORKERS; /* Needed to allocate thread structs later */
-    assert(machine_id == -1);
-    assert(update_percentage == -1);
+    for (int i = 0; i < NUM_WORKERS; i++) {
+      // MICA 인스턴스 초기화
+      mica_init(&kv_instances[i], i, 0, HERD_NUM_BKTS, HERD_LOG_CAP);
+      mica_populate_fixed_len(&kv_instances[i], HERD_NUM_KEYS, HERD_VALUE_SIZE);
 
-    assert(postlist >= 1);
+      // 라우팅 테이블(샤드 소유권) 초기화
+      // 처음에는 i번 샤드를 i번 워커(스레드)가 담당합니다.
+      route_tbl[i].owner.store(i, std::memory_order_relaxed);
+    }
   }
 
   /* Launch a single server thread or multiple client threads */
@@ -127,17 +145,7 @@ int main(int argc, char* argv[]) {
       param_arr[i].update_percentage = update_percentage;
 
       pthread_create(&thread_arr[i], NULL, run_client, &param_arr[i]);
-    } else {
-      /*
-       * Hook for gdb. Inside gdb, go to the main() stackframe and run:
-       * 1. set var zzz = 0
-       * 2. contiune
-       */
-      /*int zzz = 1;
-      while(zzz == 1) {
-              sleep(1);
-      }*/
-
+    } else { // is_client ==0
       param_arr[i].id = i;
       param_arr[i].base_port_index = base_port_index;
       param_arr[i].num_server_ports = num_server_ports;
