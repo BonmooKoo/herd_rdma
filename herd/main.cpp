@@ -9,7 +9,7 @@ extern "C" {
 }
 #include "scheduler_defs.h"
 
-struct mica_kv kv_instances[NUM_WORKERS]; // KV index to save actual KV
+struct mica_kv kv_instances[MAX_CORES]; // KV index to save actual KV
 Route route_tbl[NUM_SHARDS];              // Shard where client write thier request by RDMA Write
 std::atomic<bool> g_stop{false};          // for test
 
@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
   assert(HRD_Q_DEPTH == 128);
 
   /* All requests should fit into the master's request region */
-  assert(sizeof(struct mica_op) * NUM_CLIENTS * NUM_WORKERS * WINDOW_SIZE <
+  assert(sizeof(struct mica_op) * NUM_CLIENTS * MAX_CORES * WINDOW_SIZE <
          RR_SIZE);
 
   /* Unsignaled completion checks. worker.c does its own check w/ @postlist */
@@ -115,10 +115,10 @@ int main(int argc, char* argv[]) {
     assert(num_threads >= 1);
     assert(machine_id >= 0);
     assert(update_percentage >= 0 && update_percentage <= 100);
-    assert(postlist == -1); /* Client postlist = NUM_WORKERS */
+    assert(postlist == -1); /* Client postlist = MAX_CORES */
   } else {//is_client == 0
-    num_threads = NUM_WORKERS; /* Needed to allocate thread structs later */
-    for (int i = 0; i < NUM_WORKERS; i++) {
+    num_threads = MAX_CORES; /* Needed to allocate thread structs later */
+    for (int i = 0; i < MAX_CORES; i++) {
       // MICA 인스턴스 초기화
       mica_init(&kv_instances[i], i, 0, HERD_NUM_BKTS, HERD_LOG_CAP);
       mica_populate_fixed_len(&kv_instances[i], HERD_NUM_KEYS, HERD_VALUE_SIZE);

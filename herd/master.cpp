@@ -15,7 +15,7 @@ void* run_master(void* arg) {
       "Running HERD master with num_server_ports = %d "
       "base_port_index = %d, RR_SIZE = %d MB, RR use fraction = %.2f\n",
       num_server_ports, base_port_index, RR_SIZE / M_1,
-      (double)sizeof(struct mica_op) * NUM_CLIENTS * NUM_WORKERS * WINDOW_SIZE /
+      (double)sizeof(struct mica_op) * NUM_CLIENTS * MAX_CORES * WINDOW_SIZE /
           RR_SIZE);
 
   /*

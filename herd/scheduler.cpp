@@ -29,7 +29,7 @@ constexpr double Q_B = 0.9; // Queue Up threshold -> Load Balancing
 
 constexpr int SLO_THRESHOLD_MS = 5;
 constexpr int SCHEDULING_TICK = 16;
-constexpr int NUM_SHARDS = NUM_WORKERS; // 최대 worker 갯수 = 전체 Shard 갯수
+constexpr int NUM_SHARDS = MAX_CORES; // 최대 worker 갯수 = 전체 Shard 갯수
 struct Route { std::atomic<int> owner; std::atomic<uint64_t> epoch; };
 Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
 
@@ -194,7 +194,7 @@ public:
     Scheduler(int tid) : thread_id(tid)
     {
         schedulers[tid] = this;
-        core_state[tid] = ACTIVE; // 시작시 STARTED 단계로 consolidation을 방지.
+        core_state[tid] = STARTED; // 시작시 STARTED 단계로 consolidation을 방지.
     }
     struct LatSample
     {
@@ -281,7 +281,6 @@ public:
     }
     void emplace(Task &&task)
     {
-        // std::lock_guard<std::mutex> lock(mutex);
         work_queue.push(std::move(task));
     }
 
@@ -345,15 +344,13 @@ public:
         if (next_id < 0)
         { // no RDMA
             // 2-1) poll 실패 → 일반 코루틴 하나 실행
-	    if (work_queue.empty())
-                return;
+            if (work_queue.empty())
+                    return;
 
             Task task = std::move(work_queue.front());
-	    work_queue.pop();
-
+            work_queue.pop();
             (*task.source)(this); 
-
-	     //여기서 resume 됨
+            //여기서 resume 됨
             if (!task.is_done() && !g_stop.load())
             {
                 if (block_hint == task.utask_id)
@@ -368,11 +365,12 @@ public:
                 }
             }
         }
-        else
+        else // (!wait_list.empty())
         { // RDMA polled
             printf("[%d]polled<%d>\n",thread_id,next_id);
             wake_task(next_id);
         }
+            
     } // void schedule()
 };
 // =====================
@@ -446,22 +444,26 @@ static inline void pump_external_requests_into(Scheduler &sched, int burst = 32)
 // Herd의 요청을 폴링하여 스케줄러 큐에 넣는 함수
 static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
     static int ws[NUM_CLIENTS] = {0};
-
+    const int BURST_SIZE = 16;
     for (int shard_id = 0; shard_id < NUM_SHARDS; ++shard_id) {
         if (route_tbl[shard_id].owner.load(std::memory_order_acquire) == my_tid) {
             int clt_i = shard_id;
-            int req_offset = OFFSET(shard_id, clt_i, ws[clt_i]);
+            for (int i = 0; i < BURST_SIZE; ++i) {
+                int req_offset = OFFSET(shard_id, clt_i, ws[clt_i]);
+                if (req_buf[req_offset].opcode >= HERD_OP_GET) {
+                    // 요청이 있으면 큐에 추가
+                    Request r;
+                    r.type = req_buf[req_offset].opcode;
+                    r.key = req_buf[req_offset].key.bkt;
+                    r.req_buf_offset = req_offset;
+                    r.client_id = clt_i;
+                    r.start_time = now_ns();
 
-            if (req_buf[req_offset].opcode >= HERD_OP_GET) {
-                Request r;
-                r.type = req_buf[req_offset].opcode;
-                r.key = req_buf[req_offset].key.bkt;
-                r.req_buf_offset = req_offset;
-                r.client_id = clt_i;
-                r.start_time = now_ns();
-
-                sched.rx_queue.push(std::move(r));
-                HRD_MOD_ADD(ws[clt_i], WINDOW_SIZE);
+                    sched.rx_queue.push(std::move(r));
+                    HRD_MOD_ADD(ws[clt_i], WINDOW_SIZE); // 다음 슬롯으로 이동
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -595,6 +597,13 @@ int core_consolidation(Scheduler &sched, int tid)
     std::deque<Request> tmp;
     sched.rx_queue.steal_all(tmp);
     schedulers[target]->rx_queue.push_bulk(tmp);
+    // 4)move shard ownership
+    for (int s = 0; s < NUM_SHARDS; ++s) {
+        if (route_tbl[s].owner.load() == tid) {
+            route_tbl[s].owner.store(target, std::memory_order_release);
+        }
+    }
+
     core_state[target] = CONSOLIDATED;
     return target;
 }
@@ -690,6 +699,56 @@ void print_worker(Scheduler &sched, int tid, int coroid)
                                     } });
 
     Task task(source, tid, coroid, 0);
+    sched.emplace(std::move(task));
+}
+void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
+                           struct mica_kv* kv_ptr, volatile struct mica_op* req_buf,
+                           int num_server_ports, struct hrd_ctrl_blk** cb,
+                           struct ibv_ah** ah, struct hrd_qp_attr** clt_qp) {
+    auto* source = new CoroCall([=](CoroYield &yield) {
+        Scheduler *current = yield.get();
+        Request r;
+        struct ibv_send_wr wr, *bad_send_wr = NULL;
+        struct ibv_sge sgl;
+        struct mica_op* op_ptr_arr[1];
+        struct mica_resp resp_arr[1];
+
+        while (true) {
+            if (!current->rx_queue.try_pop(r)) {
+                yield();
+                current = yield.get();
+                continue;
+            }
+
+            volatile struct mica_op* req = &req_buf[r.req_buf_offset];
+            req->opcode -= HERD_MICA_OFFSET;
+            op_ptr_arr[0] = (struct mica_op*)req;
+
+            mica_batch_op(kv_ptr, 1, op_ptr_arr, resp_arr);
+
+            int clt_i = r.client_id;
+            int cb_i = clt_i % num_server_ports;
+            int ud_qp_i = 0;
+
+            sgl.length = resp_arr[0].val_len;
+            sgl.addr = (uint64_t)(uintptr_t)resp_arr[0].val_ptr;
+            
+            wr = {}; // Zero out the struct
+            wr.wr.ud.ah = ah[clt_i];
+            wr.wr.ud.remote_qpn = clt_qp[clt_i]->qpn;
+            wr.wr.ud.remote_qkey = HRD_DEFAULT_QKEY;
+            wr.opcode = IBV_WR_SEND_WITH_IMM;
+            wr.imm_data = lwid; // ★★ 논리적 워커 ID 사용 ★★
+            wr.num_sge = 1;
+            wr.sg_list = &sgl;
+            wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+            
+            ibv_post_send(cb[cb_i]->dgram_qp[ud_qp_i], &wr, &bad_send_wr);
+            current->record_latency(r.start_time);
+        }
+    });
+
+    Task task(source, lwid, coroid);
     sched.emplace(std::move(task));
 }
 
@@ -830,6 +889,135 @@ void master(Scheduler &sched, int tid, int coro_count)
         sched.schedule();
     }
     printf("[%d]Master ended\n",sched.thread_id);
+}
+void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_buf) {
+    if (sleeping_flags[tid]) {
+        core_state[tid] = SLEEPING;
+        sleep_thread(tid);
+        core_state[tid] = STARTED;
+    }
+
+    int sched_count = 0;
+    while (!g_stop.load())
+    {
+        sched.schedule();//RDMA poll & start coroutine
+        if (++sched_count >= SCHEDULING_TICK)
+        {
+            // printf("[%d]Status=%d\n",tid,core_state[tid].load());
+            sched_count = 0;
+            // 3-0) CONSOLIDATED/SLEEPING/STARTED -> ACTIVE
+            if (core_state[tid] == SLEEPING || core_state[tid] == CONSOLIDATED || core_state[tid] == STARTED)
+            {
+                core_state[tid] = ACTIVE;
+            }
+            else if (core_state[tid] == CONSOLIDATING)
+            {
+                // Do nothing just keep go
+            }
+            else if (core_state[tid] == ACTIVE)
+            {
+                // 3-1) 저부하이면 코어 정리 (core 0은 제외)
+                if (sched.is_idle() && tid != 0)
+                {
+                    // printf("Core[%d] idle\n", tid);
+                    int cc = core_consolidation(sched, tid);
+                    // printf("Core[%d] cc:%d\n", tid, cc);
+                    if (cc >= 0)
+                    {
+                        // 현재 work_queue의 코루틴이랑 실행전 request 싹 넘겼음
+                        // 자기전에 대기중인 RDMA request 다 처리함
+                        while (sched.blocked_num > 0 | sched.rx_queue.size() > 0)
+                        {
+                            sched.schedule();
+                        }
+                        printf("[%d] sleep after CC\n", tid);
+                        core_state[tid] = SLEEPING;
+                        if (!g_stop.load())
+                        {
+                            sleep_thread(tid);         // 넘기고 잠자기
+                            core_state[tid] = STARTED; // Wakeup 후 ACTIVE
+                        }
+                    }
+                    else if (cc == -2)
+                    {
+                        // CC 실패: 타겟을 못 잡음. 내 CONSOLIDATING 해제(짧은 쿨다운 의미로 CONSOLIDATED).
+                        core_state[tid] = CONSOLIDATED;
+
+                        // 1) 남은 RDMA 완료를 너무 오래 돌지 않게 예산 한도 내에서만 처리
+                        while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
+                        {
+                            sched.schedule();
+                        }
+                        printf("[%d]Work n Sleep\n", tid);
+                        core_state[tid] = SLEEPING;
+                        if (!g_stop.load())
+                        {
+                            sleep_thread(tid);         // 넘기고 잠
+                            core_state[tid] = STARTED; // 깨어난 뒤 다음 틱에 ACTIVE로 복원됨
+                        }
+                    }
+                    else
+                    { // cc ==-1 someone is giving me his coroutine
+                    }
+                }
+                // 3-2) SLO 위반 시 잠자는 스레드 깨워 이관
+                else if (!g_stop.load() && sched.detect_SLO_violation_slice())
+                {
+                    // printf("[%d]DetectSLOviolation\n",tid);
+                    // 3-2-1) first, set my state to CONSOLIDATED to prevent consolidation
+                    if (state_active_to_consol(tid))
+                    {
+                        // 3-2-2) try load balancing
+                        int target = -1;
+                        for (int i = 0; i < MAX_CORES; i++)
+                        {
+                            if (i != tid && sleeping_flags[i])
+                            {
+                                target = i;
+                                break;
+                            }
+                        }
+                        if (target == -1)
+                        {
+                            // printf("[%d]No target to LoadBalance\n",tid);
+                            core_state[tid] = CONSOLIDATED;
+                        }
+                        else
+                        {
+                            int lb = load_balancing(tid, target);
+                            if (lb >= 0)
+                            {
+                                wake_up_thread(target); // 깨워
+                                core_state[tid] = CONSOLIDATED;
+                                printf("[%d>>%d]LoadBalancingEnd\n", tid, target);
+                            }
+                            else if (lb == -2)
+                            {
+                                // target is consolidated by some body
+                                core_state[tid] = CONSOLIDATED;
+                                // printf("[%d]load_balancing fail\n", tid);
+                            }
+                        }
+                    }
+                    else
+                    { // CAS failed- someone is consolidating me
+                        printf("[%d]LoadBalance:CASfailed\n", tid);
+                    }
+                }
+            } // end else (core_state == ACTIVE)
+            // 3-3) Pull request
+            poll_owned_shards(sched, tid, req_buf);
+        } // end if (++sched_count >= SCHEDULING_TICK)
+    } // end while (!g_stop.load())
+
+    // drain
+    poll_owned_shards(sched, tid, req_buf);
+    while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
+    {
+        sched.schedule();
+    }
+    printf("[%d]Master ended\n",sched.thread_id);
+
 }
 
 void thread_func(int tid, int coro_count)
