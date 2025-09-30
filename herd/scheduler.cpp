@@ -95,18 +95,6 @@ static inline uint64_t now_ns()
         .count();
 }
 
-// =====================
-// Request & MPMC Queue
-// =====================
-struct Request
-{
-    int type{0};
-    uint64_t key{0};
-    uint64_t value{0};
-    // 필요하면 타임스탬프, ctx 포인터 등 확장
-    uint64_t start_time;
-};
-
 // 간단 MPMC 스타일 큐
 class MPMCQueue
 {
@@ -161,7 +149,7 @@ public:
         cv_.notify_all();
     }
 
-} g_rx;
+};
 
 // =====================
 // Task & Scheduler
@@ -653,54 +641,6 @@ static void process_request_on_worker(const Request &r, int tid, int coroid)
 // yield_type은 void에서 Scheduler*로 변경
 // call_type은 Scheduler*를 받도록 변경
 
-void print_worker(Scheduler &sched, int tid, int coroid)
-{
-    auto *source = new CoroCall([tid, coroid](CoroYield &yield)
-                                {
-                                    Scheduler *current = yield.get(); // (*call)(this)로 전달된 포인터
-                                    printf("[Coroutine%d-%d]started\n", gettid(), coroid);
-
-                                    Request r;
-                                    while (true)
-                                    {
-                                        if (!current->rx_queue.try_pop(r))
-                                        {
-                                            yield();
-                                            current = yield.get();
-                                            continue;
-                                        }
-					int thread_id=current->thread_id;
-                                        switch (r.type)
-                                        {
-                                        case OP_PUT:
-                                            printf("[%d-%d]WRITE\n",thread_id,coroid);rdma_write_nopoll(/*client addr*/reinterpret_cast<uint64_t>(&r.value),/*server_addr*/(r.key % (ALLOCSIZE / SIZEOFNODE)) * SIZEOFNODE, 8,0,thread_id,coroid);
-                                            current->block_self(coroid);
-                                            //process_request_on_worker(r, tid, coroid);
-                                            yield();
-                                            current = yield.get(); // RDMA poll됨.
-					    current->record_latency(r.start_time);
-                                            break;
-                                        case OP_GET:
-                                            rdma_read_nopoll((r.key % (ALLOCSIZE / SIZEOFNODE)) * SIZEOFNODE,8, 0, thread_id, coroid);
-                                            current->block_self(coroid);
-                                            //process_request_on_worker(r, tid, coroid);
-                                            yield();
-                                            current = yield.get(); // RDMA poll됨.
-					    current->record_latency(r.start_time);
-                                            break;
-                                        default:
-                                            // RDMA 필요 없는 경우는 바로 처리
-                                            process_request_on_worker(r, thread_id, coroid);
-                                            yield();
-                                            current = yield.get();
-					    current->record_latency(r.start_time);
-                                            continue;
-                                        }
-                                    } });
-
-    Task task(source, tid, coroid, 0);
-    sched.emplace(std::move(task));
-}
 void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
                            struct mica_kv* kv_ptr, volatile struct mica_op* req_buf,
                            int num_server_ports, struct hrd_ctrl_blk** cb,
@@ -1020,110 +960,110 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
 
 }
 
-void thread_func(int tid, int coro_count)
-{
-    bind_cpu(tid);
-    Scheduler sched(tid);
-    master(sched, tid, coro_count);
-    printf("Thread%dfinished\n", tid);
-}
-void timed_producer(int num_thread, int qps, int durationSec);
+// void thread_func(int tid, int coro_count)
+// {
+//     bind_cpu(tid);
+//     Scheduler sched(tid);
+//     master(sched, tid, coro_count);
+//     printf("Thread%dfinished\n", tid);
+// }
+// void timed_producer(int num_thread, int qps, int durationSec);
 
-int main()
-{
-    std::thread thread_list[MAX_CORES];
-    printf("RDMA Connection\n");
-    for (int i = 0; i < MAX_CORES; i++)
-    {
-        thread_list[i] = std::thread(client_connection, 0, MAX_CORES, i);
-    }
-    for (int i = 0; i < MAX_CORES; i++)
-    {
-        thread_list[i].join();
-    }
+// int main()
+// {
+//     std::thread thread_list[MAX_CORES];
+//     printf("RDMA Connection\n");
+//     for (int i = 0; i < MAX_CORES; i++)
+//     {
+//         thread_list[i] = std::thread(client_connection, 0, MAX_CORES, i);
+//     }
+//     for (int i = 0; i < MAX_CORES; i++)
+//     {
+//         thread_list[i].join();
+//     }
 
-    for (int s = 0; s < NUM_SHARDS; ++s) {
-        route_tbl[s].owner.store(s, std::memory_order_relaxed); // 샤드 s의 오너 = 스레드 s
-        route_tbl[s].epoch.store(0, std::memory_order_relaxed);
-    }
+//     for (int s = 0; s < NUM_SHARDS; ++s) {
+//         route_tbl[s].owner.store(s, std::memory_order_relaxed); // 샤드 s의 오너 = 스레드 s
+//         route_tbl[s].epoch.store(0, std::memory_order_relaxed);
+//     }
 
-    printf("Start\n");
-    const int coro_count = 10;  // 워커 코루틴 수
-    const int num_thread = 2;   // 워커 스레드 수
-    const int durationSec = 10; // 실험 시간 (초)
-    const int qps = 500000;     // 초당 요청 개수
+//     printf("Start\n");
+//     const int coro_count = 10;  // 워커 코루틴 수
+//     const int num_thread = 2;   // 워커 스레드 수
+//     const int durationSec = 10; // 실험 시간 (초)
+//     const int qps = 500000;     // 초당 요청 개수
 
-    // sleeping_flags 초기화
-    for (int i = 0; i < num_thread; i++)
-        sleeping_flags[i] = false;
-    for (int i = num_thread; i < MAX_CORES; i++)
-        sleeping_flags[i] = true;
+//     // sleeping_flags 초기화
+//     for (int i = 0; i < num_thread; i++)
+//         sleeping_flags[i] = false;
+//     for (int i = num_thread; i < MAX_CORES; i++)
+//         sleeping_flags[i] = true;
 
-    // 프로듀서 시작 (T초/QPS)
-    std::thread producer(timed_producer, num_thread, qps, durationSec);
-    for (int i = num_thread; i < MAX_CORES; i++)
-    {
-        thread_list[i] = std::thread(thread_func, i, coro_count);
-    }
-    sleep(1);
-    // 시간 측정
-    uint64_t now = std::time(nullptr);
-    printf("===============Start time : %lu ==============\n", now);
-    // 워커 시작
-    for (int i = 0; i < num_thread; i++)
-    {
-        thread_list[i] = std::thread(thread_func, i, coro_count);
-    }
+//     // 프로듀서 시작 (T초/QPS)
+//     std::thread producer(timed_producer, num_thread, qps, durationSec);
+//     for (int i = num_thread; i < MAX_CORES; i++)
+//     {
+//         thread_list[i] = std::thread(thread_func, i, coro_count);
+//     }
+//     sleep(1);
+//     // 시간 측정
+//     uint64_t now = std::time(nullptr);
+//     printf("===============Start time : %lu ==============\n", now);
+//     // 워커 시작
+//     for (int i = 0; i < num_thread; i++)
+//     {
+//         thread_list[i] = std::thread(thread_func, i, coro_count);
+//     }
 
-    // 프로듀서 종료 대기
-    producer.join();
-    now = std::time(nullptr);
-    printf("===============End time : %lu ================\n", now);
-    // 잠든 master 깨우기
-    wake_all_threads(num_thread);
-    // 워커 조인
-    for (int i = 0; i < MAX_CORES; i++)
-    {
-        if (thread_list[i].joinable())
-            thread_list[i].join();
-    }
+//     // 프로듀서 종료 대기
+//     producer.join();
+//     now = std::time(nullptr);
+//     printf("===============End time : %lu ================\n", now);
+//     // 잠든 master 깨우기
+//     wake_all_threads(num_thread);
+//     // 워커 조인
+//     for (int i = 0; i < MAX_CORES; i++)
+//     {
+//         if (thread_list[i].joinable())
+//             thread_list[i].join();
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
-void timed_producer(int num_thread, int qps, int durationSec)
-{
-    bind_cpu(num_thread);
+// void timed_producer(int num_thread, int qps, int durationSec)
+// {
+//     bind_cpu(num_thread);
 
-    using clock = std::chrono::steady_clock;
-    auto start = clock::now();
-    auto deadline = start + std::chrono::seconds(durationSec);
+//     using clock = std::chrono::steady_clock;
+//     auto start = clock::now();
+//     auto deadline = start + std::chrono::seconds(durationSec);
 
-    // 한 요청 간격
-    auto period = std::chrono::nanoseconds(1'000'000'000LL / std::max(1, qps));
-    auto next = start;
+//     // 한 요청 간격
+//     auto period = std::chrono::nanoseconds(1'000'000'000LL / std::max(1, qps));
+//     auto next = start;
 
-    uint64_t k = 1;
-    while (!g_stop.load() && clock::now() < deadline)
-    {
-        Request r;
-        r.type = OP_PUT; // OP_PUT/GET/DELETE/RANGE/UPDATE 중 하나
-        r.key = k++;
-        r.value = k * 10;
-        r.start_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           clock::now().time_since_epoch())
-                           .count();
-        // [당신의 현재 g_rx는 mutex 기반이라 실패 반환이 없음]
-        int shard = r.key % NUM_SHARDS;
-        int owner = route_tbl[shard].owner.load(std::memory_order_acquire);
+//     uint64_t k = 1;
+//     while (!g_stop.load() && clock::now() < deadline)
+//     {
+//         Request r;
+//         r.type = OP_PUT; // OP_PUT/GET/DELETE/RANGE/UPDATE 중 하나
+//         r.key = k++;
+//         r.value = k * 10;
+//         r.start_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+//                            clock::now().time_since_epoch())
+//                            .count();
+//         // [당신의 현재 g_rx는 mutex 기반이라 실패 반환이 없음]
+//         int shard = r.key % NUM_SHARDS;
+//         int owner = route_tbl[shard].owner.load(std::memory_order_acquire);
 
-        g_rx.push(std::move(r));
+//         g_rx.push(std::move(r));
 
-        // 다음 발사 시각까지 대기 (드리프트 최소화)
-        next += period;
-        std::this_thread::sleep_until(next);
-    }
+//         // 다음 발사 시각까지 대기 (드리프트 최소화)
+//         next += period;
+//         std::this_thread::sleep_until(next);
+//     }
 
-    // 실험 타임업 → 종료 신호
-    g_stop.store(true);
-}
+//     // 실험 타임업 → 종료 신호
+//     g_stop.store(true);
+// }
