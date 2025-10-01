@@ -1,7 +1,8 @@
+extern "C" {
 #include "hrd.h"
 #include "main.h"
 #include "mica.h"
-
+}
 /* Random local_hids for master */
 #define MASTER_P0_ID -22
 

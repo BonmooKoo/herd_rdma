@@ -28,7 +28,7 @@ constexpr double Q_B = 0.9; // Queue Up threshold -> Load Balancing
 constexpr int SLO_THRESHOLD_MS = 5;
 constexpr int SCHEDULING_TICK = 16;
 constexpr int NUM_SHARDS = MAX_CORES; // 최대 worker 갯수 = 전체 Shard 갯수
-Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
+extern Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
 
 // 실험 종료를 알리는 전역변수
 extern std::atomic<bool> g_stop;

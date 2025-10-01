@@ -3,6 +3,8 @@
 #include <atomic>
 #include <boost/coroutine/symmetric_coroutine.hpp>
 
+extern std::atomic<bool> g_stop;
+
 // 샤드 소유권 테이블 구조체 (C++ 스타일)
 struct Route {
     std::atomic<int> owner;
