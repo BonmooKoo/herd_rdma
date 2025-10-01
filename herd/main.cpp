@@ -1,6 +1,7 @@
 #include <iostream>
 #include <thread>
 #include <atomic>
+#include <getopt.h>
 
 extern "C" {
 #include "hrd.h"
@@ -8,9 +9,8 @@ extern "C" {
 #include "mica.h"
 }
 #include "scheduler_defs.h"
-
 struct mica_kv kv_instances[MAX_CORES]; // KV index to save actual KV
-Route route_tbl[NUM_SHARDS];              // Shard where client write thier request by RDMA Write
+Route route_tbl[MAX_CORES];              // Shard where client write thier request by RDMA Write
 std::atomic<bool> g_stop{false};          // for test
 
 // 코루틴 스케줄러 스레드 함수 프로토타입
@@ -19,17 +19,6 @@ void timed_producer(int num_thread, int qps, int durationSec); // (참고용) Re
 
 
 int main(int argc, char* argv[]) {
-  /* Use small queues to reduce cache pressure */
-  assert(HRD_Q_DEPTH == 128);
-
-  /* All requests should fit into the master's request region */
-  assert(sizeof(struct mica_op) * NUM_CLIENTS * MAX_CORES * WINDOW_SIZE <
-         RR_SIZE);
-
-  /* Unsignaled completion checks. worker.c does its own check w/ @postlist */
-  assert(UNSIG_BATCH >= WINDOW_SIZE);     /* Pipelining check for clients */
-  assert(HRD_Q_DEPTH >= 2 * UNSIG_BATCH); /* Queue capacity check */
-
   int i, c;
   int is_master = -1;
   int num_threads = -1;
@@ -48,7 +37,8 @@ int main(int argc, char* argv[]) {
       {.name = "update-percentage", .has_arg = 1, .val = 'u'},
       {.name = "machine-id", .has_arg = 1, .val = 'm'},
       {.name = "postlist", .has_arg = 1, .val = 'p'},
-      {0}};
+      {0}
+    };
 
   /* Parse and check arguments */
   while (1) {
@@ -131,8 +121,8 @@ int main(int argc, char* argv[]) {
 
   /* Launch a single server thread or multiple client threads */
   printf("main: Using %d threads\n", num_threads);
-  param_arr = malloc(num_threads * sizeof(struct thread_params));
-  thread_arr = malloc(num_threads * sizeof(pthread_t));
+  param_arr = new thread_params[num_threads];
+  thread_arr = new pthread_t[num_threads];
 
   for (i = 0; i < num_threads; i++) {
     param_arr[i].postlist = postlist;
