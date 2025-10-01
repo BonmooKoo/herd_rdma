@@ -23,7 +23,7 @@ void* run_master(void* arg) {
    * for all client QPs. The ith client QP must connect to the ith QP in a
    * a control block, but clients can choose the control block.
    */
-  struct hrd_ctrl_blk** cb = malloc(num_server_ports * sizeof(void*));
+  struct hrd_ctrl_blk** cb = new hrd_ctrl_blk*[num_server_ports];
   assert(cb != NULL);
 
   /* Allocate a registered buffer for port #0 only */
