@@ -14,10 +14,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <cmath>
-// RDMA
-#include "rdma_common.h"
-#include "rdma_verb.h"
-#include "keeper.h"
+#include <unordered_map>
+#include <cinttypes>
 
 //Config
 #include "main.h"
@@ -30,7 +28,6 @@ constexpr double Q_B = 0.9; // Queue Up threshold -> Load Balancing
 constexpr int SLO_THRESHOLD_MS = 5;
 constexpr int SCHEDULING_TICK = 16;
 constexpr int NUM_SHARDS = MAX_CORES; // 최대 worker 갯수 = 전체 Shard 갯수
-struct Route { std::atomic<int> owner; std::atomic<uint64_t> epoch; };
 Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
 
 // 실험 종료를 알리는 전역변수
@@ -198,7 +195,7 @@ public:
     {
         uint64_t end = now_ns();
         uint64_t lat = (end > start_ns) ? (end - start_ns) : 0;
-        printf("[%d]%llu nsec\n",thread_id,lat);
+        printf("[%d]%" PRIu64 " nsec\n", thread_id, lat);
 	lat_ring[lat_idx] = LatSample{end, (uint32_t)std::min<uint64_t>(lat, UINT32_MAX)};
         lat_idx = (lat_idx + 1) & (LAT_CAP - 1);
         if (lat_cnt < LAT_CAP)
@@ -323,7 +320,7 @@ public:
                 // printf("[%d]Enqueue<%d>\n",thread_id,wait_list.front().utask_id);
                 wait_list.pop();
             }
-            printf("[%d]pull fin <%d:%d>\n", thread_id, work_queue.size(), wait_list.size());
+            printf("[%d]pull fin <%zu:%zu>\n", thread_id, work_queue.size(), wait_list.size());
         }
 
         // 2) RDMA poll 확인
@@ -738,7 +735,7 @@ void master(Scheduler &sched, int tid, int coro_count)
                     {
                         // 현재 work_queue의 코루틴이랑 실행전 request 싹 넘겼음
                         // 자기전에 대기중인 RDMA request 다 처리함
-                        while (sched.blocked_num > 0 | sched.rx_queue.size() > 0)
+                        while (sched.blocked_num > 0 || sched.rx_queue.size() > 0)
                         {
                             sched.schedule();
                         }

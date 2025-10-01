@@ -17,8 +17,10 @@ void* run_worker(void* arg) {
   int wrkr_lid = params.id;
 
   struct hrd_ctrl_blk* cb[MAX_SERVER_PORTS];
+  int num_server_ports = params.num_server_ports; // 서버가 사용할 RDMA 네트워크의 포트수  = 1
+  int base_port_index = params.base_port_index;   // 서버가 사용할 RDMA 포트의 시작 번호 
 
-  for (i = 0; i < num_server_ports; i++) {
+  for (int i = 0; i < num_server_ports; i++) {
     int ib_port_index = base_port_index + i;
 
     cb[i] = hrd_ctrl_blk_init(wrkr_lid,          /* local_hid */
@@ -33,7 +35,7 @@ void* run_worker(void* arg) {
   volatile struct mica_op* req_buf;
   int sid = shmget(MASTER_SHM_KEY, RR_SIZE, SHM_HUGETLB | 0666);
   assert(sid != -1);
-  req_buf = shmat(sid, 0, 0);
+  req_buf = static_cast<volatile struct mica_op*>(shmat(sid, 0, 0));
   assert(req_buf != (void*)-1);
 
   /* Create an address handle for each client */
