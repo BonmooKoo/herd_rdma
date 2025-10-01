@@ -629,12 +629,6 @@ int load_balancing(int from_tid, int to_tid)
 // ===============
 // request handler func
 
-static void process_request_on_worker(const Request &r, int tid, int coroid)
-{
-    // RDMA 아닌 simple CPU work
-    // printf("[Worker%d-%d]%d\n",tid,coroid,r.key);
-}
-
 // 워커 코루틴: 깨어날 때마다 rx_queue에서 Request를 소비
 // yield_type은 void에서 Scheduler*로 변경
 // call_type은 Scheduler*를 받도록 변경
