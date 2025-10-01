@@ -306,57 +306,34 @@ public:
     }
 
     // 한 번에 wait_list -> work_queue로 옮기고, 한 개 코루틴을 실행
-    void schedule()
-    {
-        // 1) Wait list -> Work Queue
-        if (!wait_list.empty())
-        {
-            printf("[%d]pulling wait_list\n", thread_id);
+    void schedule(){
+        // 1. Wait list -> Work Queue (대기중인 작업을 실행 큐로 옮김)
+        if (!wait_list.empty()) {
             std::lock_guard<std::mutex> lock(mutex);
-            while (!wait_list.empty())
-            {
-                // work_queue.push(std::move(wait_list.front()));
-                emplace(std::move(wait_list.front()));
-                // printf("[%d]Enqueue<%d>\n",thread_id,wait_list.front().utask_id);
+            while (!wait_list.empty()) {
+                work_queue.push(std::move(wait_list.front()));
                 wait_list.pop();
             }
-            printf("[%d]pull fin <%zu:%zu>\n", thread_id, work_queue.size(), wait_list.size());
         }
 
-        // 2) RDMA poll 확인
-        int next_id = poll_coroutine(this->thread_id);
-        //int next_id = -1;
-        if (next_id < 0)
-        { // no RDMA
-            // 2-1) poll 실패 → 일반 코루틴 하나 실행
-            if (work_queue.empty())
-                    return;
+        // 2. Work Queue에 작업이 없으면 할 일이 없음
+        if (work_queue.empty()) {
+            return;
+        }
 
-            Task task = std::move(work_queue.front());
-            work_queue.pop();
-            (*task.source)(this); 
-            //여기서 resume 됨
-            if (!task.is_done() && !g_stop.load())
-            {
-                if (block_hint == task.utask_id)
-                {
-                    block_task(std::move(task));
-                    block_hint = -1;
-                    return;
-                }
-                else
-                {
-                    emplace(std::move(task));
-                }
-            }
+        // 3. Work Queue에서 코루틴을 하나 꺼내 실행
+        Task task = std::move(work_queue.front());
+        work_queue.pop();
+
+        if (task.source && (*task.source)) {
+            (*task.source)(this); // 코루틴 실행
         }
-        else // (!wait_list.empty())
-        { // RDMA polled
-            printf("[%d]polled<%d>\n",thread_id,next_id);
-            wake_task(next_id);
+
+        // 4. 코루틴이 아직 끝나지 않았다면 다시 큐에 넣어 다음 기회에 실행
+        if (!task.is_done()) {
+            work_queue.push(std::move(task));
         }
-            
-    } // void schedule()
+    }// void schedule()
 };
 // =====================
 // Sleep / Wake helpers
@@ -410,7 +387,9 @@ int post_mycoroutines_to(int from_tid, int to_tid)
         printf("[%d>>%d]post_coroutine<%d>\n",from_tid,to_tid,from_sched.work_queue.front().utask_id);
         from_sched.work_queue.pop();
     }
-    printf("[%d:%d]post_coroutineto<%d:%d:%d>\n", from_tid, from_sched.work_queue.size(), to_tid, to_sched.work_queue.size(), to_sched.wait_list.size());
+    // printf("[%d:%d]post_coroutineto<%d:%d:%d>\n", from_tid, from_sched.work_queue.size(), to_tid, to_sched.work_queue.size(), to_sched.wait_list.size());
+    printf("[%d:%zu]post_coroutineto<%d:%zu:%zu>\n", from_tid, from_sched.work_queue.size(), to_tid, to_sched.work_queue.size(), to_sched.wait_list.size());
+
     return count;
 }
 
