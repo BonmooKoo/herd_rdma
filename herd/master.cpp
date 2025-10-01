@@ -1,3 +1,7 @@
+#include <iostream>
+#include <thread>
+#include <cstring> // memset
+#include <unistd.h> 
 extern "C" {
 #include "hrd.h"
 #include "main.h"
