@@ -2,13 +2,13 @@
 #include <thread>
 #include <atomic>
 #include <getopt.h>
-
+#include <vector>
+#include "scheduler_defs.h"
 extern "C" {
 #include "hrd.h"
 #include "main.h"
 #include "mica.h"
 }
-#include "scheduler_defs.h"
 struct mica_kv kv_instances[MAX_CORES]; // KV index to save actual KV
 Route route_tbl[MAX_CORES];              // Shard where client write thier request by RDMA Write
 std::atomic<bool> g_stop{false};          // for test
@@ -18,13 +18,12 @@ void* run_worker(void* arg);
 void timed_producer(int num_thread, int qps, int durationSec); // (참고용) Request 생성자
 
 int main(int argc, char* argv[]) {
-  int i, c;
+  int c;
   int is_master = -1;
   int num_threads = -1;
   int is_client = -1, machine_id = -1, postlist = -1, update_percentage = -1;
   int base_port_index = -1, num_server_ports = -1, num_client_ports = -1;
   struct thread_params* param_arr;
-  pthread_t* thread_arr;
 
   static struct option opts[] = {
     {"master", required_argument, nullptr, 'M'},
