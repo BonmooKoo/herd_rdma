@@ -1,5 +1,5 @@
 CFLAGS  := -O3 -Wall -Werror -Wno-unused-result -I ../libhrd/ -I ../mica/
-LD      := gcc -O3
+LD      := g++ -O3
 LDFLAGS := ${LDFLAGS} -libverbs -lrt -lpthread -lmemcached -lnuma
 
 APPS    := main

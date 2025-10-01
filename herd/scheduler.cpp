@@ -31,8 +31,7 @@ constexpr int NUM_SHARDS = MAX_CORES; // 최대 worker 갯수 = 전체 Shard 갯
 Route route_tbl[NUM_SHARDS];  // shard -> current owner tid
 
 // 실험 종료를 알리는 전역변수
-std::atomic<bool> g_stop{false};
-
+extern std::atomic<bool> g_stop;
 enum CoreState
 {
     SLEEPING,
