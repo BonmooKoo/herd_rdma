@@ -1,3 +1,5 @@
+#ifndef MAIN_H_ // "MAIN_H_"라는 이름이 아직 정의되지 않았다면,
+#define MAIN_H_ // 지금 "MAIN_H_"를 정의하고, 아래 코드를 포함시킨다.
 #include <stdint.h>
 
 /*
@@ -58,3 +60,6 @@ struct thread_params {
 void* run_master(void* arg);
 void* run_worker(void* arg);
 void* run_client(void* arg);
+
+
+#endif // MAIN_H_ // #ifndef 블록의 끝

@@ -863,7 +863,7 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                     {
                         // 현재 work_queue의 코루틴이랑 실행전 request 싹 넘겼음
                         // 자기전에 대기중인 RDMA request 다 처리함
-                        while (sched.blocked_num > 0 | sched.rx_queue.size() > 0)
+                        while (sched.blocked_num > 0 || sched.rx_queue.size() > 0)
                         {
                             sched.schedule();
                         }

@@ -1,15 +1,16 @@
+#include "scheduler_defs.h"
+
 extern "C" {
 #include "hrd.h"
 #include "main.h"
 #include "mica.h"
 }
 
-#include "scheduler_defs.h"
 #include "scheduler.cpp" // 스케줄러 구현 파일을 여기에 포함
 
 // main.cpp에 선언된 전역 변수들을 extern으로 참조
-extern struct mica_kv kv_instances[NUM_WORKERS];
-extern Route route_tbl[NUM_SHARDS];
+extern struct mica_kv kv_instances[MAX_CORES];
+extern Route route_tbl[MAX_CORES];
 extern std::atomic<bool> g_stop;
 
 void* run_worker(void* arg) {
@@ -44,7 +45,7 @@ void* run_worker(void* arg) {
   struct hrd_qp_attr* clt_qp[NUM_CLIENTS];
 
   //RDMA : Client 쪽 thread와 연결설정
-  for (i = 0; i < NUM_CLIENTS; i++) {
+  for (int i = 0; i < NUM_CLIENTS; i++) {
     /* Compute the control block and physical port index for client @i */
     int cb_i = i % num_server_ports;
     int local_port_i = base_port_index + cb_i;
