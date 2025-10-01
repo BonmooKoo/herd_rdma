@@ -28,17 +28,17 @@ int main(int argc, char* argv[]) {
   pthread_t* thread_arr;
 
   static struct option opts[] = {
-      {.name = "master", .has_arg = 1, .val = 'M'},
-      {.name = "num-threads", .has_arg = 1, .val = 't'},
-      {.name = "base-port-index", .has_arg = 1, .val = 'b'},
-      {.name = "num-server-ports", .has_arg = 1, .val = 'N'},
-      {.name = "num-client-ports", .has_arg = 1, .val = 'n'},
-      {.name = "is-client", .has_arg = 1, .val = 'c'},
-      {.name = "update-percentage", .has_arg = 1, .val = 'u'},
-      {.name = "machine-id", .has_arg = 1, .val = 'm'},
-      {.name = "postlist", .has_arg = 1, .val = 'p'},
-      {0}};
-
+    {"master", required_argument, nullptr, 'M'},
+    {"num-threads", required_argument, nullptr, 't'},
+    {"base-port-index", required_argument, nullptr, 'b'},
+    {"num-server-ports", required_argument, nullptr, 'N'},
+    {"num-client-ports", required_argument, nullptr, 'n'},
+    {"is-client", required_argument, nullptr, 'c'},
+    {"update-percentage", required_argument, nullptr, 'u'},
+    {"machine-id", required_argument, nullptr, 'm'},
+    {"postlist", required_argument, nullptr, 'p'},
+    {nullptr, 0, nullptr, 0} // 배열의 끝을 의미하는 NULL 초기화
+  };
   /* Parse and check arguments */
   while (1) {
     c = getopt_long(argc, argv, "M:t:b:N:n:c:u:m:p", opts, NULL);
