@@ -37,8 +37,7 @@ int main(int argc, char* argv[]) {
       {.name = "update-percentage", .has_arg = 1, .val = 'u'},
       {.name = "machine-id", .has_arg = 1, .val = 'm'},
       {.name = "postlist", .has_arg = 1, .val = 'p'},
-      {0}
-    };
+      {0}};
 
   /* Parse and check arguments */
   while (1) {
