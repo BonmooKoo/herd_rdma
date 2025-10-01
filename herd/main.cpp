@@ -89,9 +89,9 @@ int main(int argc, char* argv[]) {
     master_params.num_server_ports = num_server_ports;
     master_params.base_port_index = base_port_index;
 
-    pthread_t master_thread;
-    pthread_create(&master_thread, NULL, run_master, (void*)&master_params);
-    pthread_join(master_thread, NULL);
+    std::thread master_thread(run_master, &master_params);
+    master_thread.join();
+
     exit(0);
   }
 
@@ -120,31 +120,33 @@ int main(int argc, char* argv[]) {
   /* Launch a single server thread or multiple client threads */
   printf("main: Using %d threads\n", num_threads);
   param_arr = new thread_params[num_threads];
-  thread_arr = new pthread_t[num_threads];
 
-  for (i = 0; i < num_threads; i++) {
-    param_arr[i].postlist = postlist;
+  // 1. pthread_t 배열 대신 std::vector<std::thread> 사용
+  std::vector<std::thread> threads;
 
-    if (is_client) {
-      param_arr[i].id = (machine_id * num_threads) + i;
-      param_arr[i].base_port_index = base_port_index;
-      param_arr[i].num_server_ports = num_server_ports;
-      param_arr[i].num_client_ports = num_client_ports;
-      param_arr[i].update_percentage = update_percentage;
+  for (int i = 0; i < num_threads; i++) {
+      param_arr[i].postlist = postlist;
 
-      pthread_create(&thread_arr[i], NULL, run_client, &param_arr[i]);
-    } else { // is_client ==0
-      param_arr[i].id = i;
-      param_arr[i].base_port_index = base_port_index;
-      param_arr[i].num_server_ports = num_server_ports;
-      param_arr[i].num_client_ports = num_client_ports;
-      pthread_create(&thread_arr[i], NULL, run_worker, &param_arr[i]);
-    }
+      if (is_client) {
+          // ... (client param setup)
+          
+          // 2. threads.emplace_back으로 스레드 생성 및 시작
+          threads.emplace_back(run_client, &param_arr[i]);
+      } else { // is_client == 0
+          // ... (worker param setup)
+          
+          threads.emplace_back(run_worker, &param_arr[i]);
+      }
   }
 
-  for (i = 0; i < num_threads; i++) {
-    pthread_join(thread_arr[i], NULL);
+  printf("main: Launched %zu threads. Waiting for them to complete.\n", threads.size());
+
+  // 3. 더 깔끔한 방식으로 모든 스레드가 종료되길 기다림
+  for (auto& t : threads) {
+      t.join();
   }
+
+  delete[] param_arr; // param_arr에 대한 메모리 해제는 여전히 필요
 
   return 0;
 }
