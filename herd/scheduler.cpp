@@ -415,17 +415,17 @@ int post_mycoroutines_to(int from_tid, int to_tid)
 }
 
 // global rx_queue → thread_local rx_queue
-static inline void pump_external_requests_into(Scheduler &sched, int burst = 32)
-{
-    Request r;
-    int cnt = 0;
-    while (cnt < burst && g_rx.try_pop(r))
-    {
-        sched.rx_queue.push(std::move(r));
-        cnt++;
-    }
-    // printf("[%d]Pulled%d\n",sched.thread_id,cnt);
-}
+// static inline void pump_external_requests_into(Scheduler &sched, int burst = 32)
+// {
+//     Request r;
+//     int cnt = 0;
+//     while (cnt < burst && g_rx.try_pop(r))
+//     {
+//         sched.rx_queue.push(std::move(r));
+//         cnt++;
+//     }
+//     // printf("[%d]Pulled%d\n",sched.thread_id,cnt);
+// }
 // Herd의 요청을 폴링하여 스케줄러 큐에 넣는 함수
 static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
     static int ws[NUM_CLIENTS] = {0};
@@ -598,7 +598,8 @@ int load_balancing(int from_tid, int to_tid)
 {
     Scheduler *to_sched = schedulers[to_tid];
     Scheduler *from_sched = schedulers[from_tid];
-    printf("[%d>>%d]TryLoadBalancing<%d>\n", from_tid, to_tid, from_sched->work_queue.size());
+    // printf("[%d>>%d]TryLoadBalancing<%d>\n", from_tid, to_tid, from_sched->work_queue.size());
+    printf("[%d>>%d]TryLoadBalancing<%zu>\n", from_tid, to_tid, from_sched->work_queue.size());
     if (!state_sleep_to_consol(to_tid))
     {
         // 이미 SLEEPING이 아님
@@ -689,144 +690,6 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
     sched.emplace(std::move(task));
 }
 
-void master(Scheduler &sched, int tid, int coro_count)
-{
-    bind_cpu(tid);
-    if (sleeping_flags[tid])
-    {
-        // printf("[%d]Sleep\n", tid);
-        core_state[tid] = SLEEPING;
-        sleep_thread(tid); // 미리 재움
-        // printf("[%d]Wakeup\n", tid);
-        core_state[tid] = STARTED;
-    }
-    for (int i = 0; i < coro_count; ++i)
-    {
-        print_worker(sched, tid, tid * coro_count + i);
-    }
-    pump_external_requests_into(sched, /*burst*/ 64);
-
-    int sched_count = 0;
-    while (!g_stop.load())
-    {
-        sched.schedule();//RDMA poll & start coroutine
-        if (++sched_count >= SCHEDULING_TICK)
-        {
-            // printf("[%d]Status=%d\n",tid,core_state[tid].load());
-            sched_count = 0;
-            // 3-0) CONSOLIDATED/SLEEPING/STARTED -> ACTIVE
-            if (core_state[tid] == SLEEPING || core_state[tid] == CONSOLIDATED || core_state[tid] == STARTED)
-            {
-                core_state[tid] = ACTIVE;
-            }
-            else if (core_state[tid] == CONSOLIDATING)
-            {
-                // Do nothing just keep go
-            }
-            else if (core_state[tid] == ACTIVE)
-            {
-                // 3-1) 저부하이면 코어 정리 (core 0은 제외)
-                if (sched.is_idle() && tid != 0)
-                {
-                    // printf("Core[%d] idle\n", tid);
-                    int cc = core_consolidation(sched, tid);
-                    // printf("Core[%d] cc:%d\n", tid, cc);
-                    if (cc >= 0)
-                    {
-                        // 현재 work_queue의 코루틴이랑 실행전 request 싹 넘겼음
-                        // 자기전에 대기중인 RDMA request 다 처리함
-                        while (sched.blocked_num > 0 || sched.rx_queue.size() > 0)
-                        {
-                            sched.schedule();
-                        }
-                        printf("[%d] sleep after CC\n", tid);
-                        core_state[tid] = SLEEPING;
-                        if (!g_stop.load())
-                        {
-                            sleep_thread(tid);         // 넘기고 잠자기
-                            core_state[tid] = STARTED; // Wakeup 후 ACTIVE
-                        }
-                    }
-                    else if (cc == -2)
-                    {
-                        // CC 실패: 타겟을 못 잡음. 내 CONSOLIDATING 해제(짧은 쿨다운 의미로 CONSOLIDATED).
-                        core_state[tid] = CONSOLIDATED;
-
-                        // 1) 남은 RDMA 완료를 너무 오래 돌지 않게 예산 한도 내에서만 처리
-                        while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
-                        {
-                            sched.schedule();
-                        }
-                        printf("[%d]Work n Sleep\n", tid);
-                        core_state[tid] = SLEEPING;
-                        if (!g_stop.load())
-                        {
-                            sleep_thread(tid);         // 넘기고 잠
-                            core_state[tid] = STARTED; // 깨어난 뒤 다음 틱에 ACTIVE로 복원됨
-                        }
-                    }
-                    else
-                    { // cc ==-1 someone is giving me his coroutine
-                    }
-                }
-                // 3-2) SLO 위반 시 잠자는 스레드 깨워 이관
-                else if (!g_stop.load() && sched.detect_SLO_violation_slice())
-                {
-                    // printf("[%d]DetectSLOviolation\n",tid);
-                    // 3-2-1) first, set my state to CONSOLIDATED to prevent consolidation
-                    if (state_active_to_consol(tid))
-                    {
-                        // 3-2-2) try load balancing
-                        int target = -1;
-                        for (int i = 0; i < MAX_CORES; i++)
-                        {
-                            if (i != tid && sleeping_flags[i])
-                            {
-                                target = i;
-                                break;
-                            }
-                        }
-                        if (target == -1)
-                        {
-                            // printf("[%d]No target to LoadBalance\n",tid);
-                            core_state[tid] = CONSOLIDATED;
-                        }
-                        else
-                        {
-                            int lb = load_balancing(tid, target);
-                            if (lb >= 0)
-                            {
-                                wake_up_thread(target); // 깨워
-                                core_state[tid] = CONSOLIDATED;
-                                printf("[%d>>%d]LoadBalancingEnd\n", tid, target);
-                            }
-                            else if (lb == -2)
-                            {
-                                // target is consolidated by some body
-                                core_state[tid] = CONSOLIDATED;
-                                // printf("[%d]load_balancing fail\n", tid);
-                            }
-                        }
-                    }
-                    else
-                    { // CAS failed- someone is consolidating me
-                        printf("[%d]LoadBalance:CASfailed\n", tid);
-                    }
-                }
-            } // end else (core_state == ACTIVE)
-            // 3-3) Pull request
-            pump_external_requests_into(sched, /*burst*/ 64);
-        } // end if (++sched_count >= SCHEDULING_TICK)
-    } // end while (!g_stop.load())
-
-    // drain
-    pump_external_requests_into(sched, 1024);
-    while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
-    {
-        sched.schedule();
-    }
-    printf("[%d]Master ended\n",sched.thread_id);
-}
 void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_buf) {
     if (sleeping_flags[tid]) {
         core_state[tid] = SLEEPING;

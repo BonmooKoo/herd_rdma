@@ -65,14 +65,12 @@ void* run_worker(void* arg) {
     printf("main: Worker %d found client %d of %d clients. Client LID: %d\n",
            wrkr_lid, i, NUM_CLIENTS, clt_qp[i]->lid);
 
-    struct ibv_ah_attr ah_attr = {
-        .is_global = 0,
-        .dlid = clt_qp[i]->lid,
-        .sl = 0,
-        .src_path_bits = 0,
-        /* port_num (> 1): device-local port for responses to this client */
-        .port_num = local_port_i + 1,
-    };
+    struct ibv_ah_attr ah_attr;
+    ah_attr.is_global = 0;
+    ah_attr.dlid = static_cast<uint16_t>(clt_qp[i]->lid); // narrowing conversion 해결
+    ah_attr.sl = 0;
+    ah_attr.src_path_bits = 0;
+    ah_attr.port_num = local_port_i + 1;
 
     ah[i] = ibv_create_ah(cb[cb_i]->pd, &ah_attr);
     assert(ah[i] != NULL);

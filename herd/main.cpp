@@ -17,8 +17,6 @@ std::atomic<bool> g_stop{false};          // for test
 void* run_worker(void* arg);
 void timed_producer(int num_thread, int qps, int durationSec); // (참고용) Request 생성자
 
-
-
 int main(int argc, char* argv[]) {
   int i, c;
   int is_master = -1;
