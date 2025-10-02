@@ -152,188 +152,7 @@ public:
 // =====================
 
 
-class Scheduler
-{
-//Scheduler는 Core위에서 coroutine을 관리하는 역할을 하고
-//Task는 coroutine을 감싸는 class임. 
-public:
-    int thread_id;
-    std::queue<Task> work_queue; // Work Queue (코루틴 스케줄)
-    std::queue<Task> wait_list;  // Wait list (코루틴 대기)
-    std::mutex mutex;            // Mutex for Wait list
 
-    // 스레드 내부 요청 큐 (외부 g_rx에서 옮겨온 Request 소비)
-    MPMCQueue rx_queue;
-
-    // RDMA IO 대기중인 코루틴
-    std::unordered_map<int, Task> blocked;
-    int blocked_num{0};
-    int block_hint{-1};
-
-    // SLO & Time
-    static constexpr int LAT_CAP = 4096;
-    static constexpr uint64_t WINDOW_NS = 2ULL * 1000000ULL; // 2ms
-    static constexpr uint64_t SLO_NS = (uint64_t)SLO_THRESHOLD_MS * 1'000'000ULL;
-
-    Scheduler(int tid) : thread_id(tid)
-    {
-        schedulers[tid] = this;
-        core_state[tid] = STARTED; // 시작시 STARTED 단계로 consolidation을 방지.
-    }
-    struct LatSample
-    {
-        uint64_t ts_ns;
-        uint32_t lat_ns;
-    };
-    std::array<LatSample, LAT_CAP> lat_ring{};
-    int lat_idx = 0; // next write pos
-    int lat_cnt = 0; // valid count (<= LAT_CAP)
-
-    // 요청 완료 직후 호출 (start_ns는 Request.start_time)
-    inline void record_latency(uint64_t start_ns)
-    {
-        uint64_t end = now_ns();
-        uint64_t lat = (end > start_ns) ? (end - start_ns) : 0;
-        printf("[%d]%" PRIu64 " nsec\n", thread_id, lat);
-	lat_ring[lat_idx] = LatSample{end, (uint32_t)std::min<uint64_t>(lat, UINT32_MAX)};
-        lat_idx = (lat_idx + 1) & (LAT_CAP - 1);
-        if (lat_cnt < LAT_CAP)
-            ++lat_cnt;
-    }
-
-    // 최근 WINDOW_NS에서 p99(ns) 반환. 샘플 부족 시 0
-    uint64_t p99_in_recent_window() const
-    {
-        if (lat_cnt == 0)
-            return 0;
-        uint64_t cutoff = now_ns() - WINDOW_NS;
-
-        uint32_t tmp[LAT_CAP];
-        int k = 0;
-
-        // 최근부터 역순으로 모으면 cutoff 이전에서 빨리 중단 가능
-        for (int i = 0; i < lat_cnt; ++i)
-        {
-            int pos = (lat_idx - 1 - i) & (LAT_CAP - 1);
-            const LatSample &s = lat_ring[pos];
-            if (s.ts_ns < cutoff)
-                break;
-            tmp[k++] = s.lat_ns;
-        }
-        if (k < 50)
-            return 0; // 윈도우 내 샘플이 너무 적으면 스킵
-
-        int idx = (int)std::floor(0.99 * (k - 1));
-        std::nth_element(tmp, tmp + idx, tmp + k);
-        return tmp[idx];
-    }
-
-    bool detect_SLO_violation()
-    {
-        if (rx_queue.size() > Q_B * MAX_Q)
-        {
-            return true;
-        }
-        else
-            return false;
-    }
-    bool detect_SLO_violation_slice()
-    {
-        if (rx_queue.size() > Q_B * MAX_Q)
-            return true; // 기존 조건 유지
-        uint64_t p99ns = p99_in_recent_window();
-        bool ret = (p99ns > 0 && p99ns > SLO_NS);
-        if (ret)
-        {
-            printf("Latency Violate\n");
-            return true;
-        }
-        else
-        {
-            return false;
-        }
-    }
-
-    bool is_idle()
-    {
-        if (rx_queue.size() < Q_A * MAX_Q)
-        {
-            return true;
-        }
-        else
-            return false;
-    }
-    void emplace(Task &&task)
-    {
-        work_queue.push(std::move(task));
-    }
-
-    void enqueue_to_wait_list(Task &&task)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        wait_list.push(std::move(task));
-    }
-
-    bool is_empty()
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return work_queue.empty() && wait_list.empty();
-    }
-
-    // RDMA
-    void block_self(int utask_id) { block_hint = utask_id; }
-    // 코루틴을 blocked 리스트에 넣기 -- RDMA request 전송한 코루틴이 스스로
-    void block_task(Task &&t)
-    {
-        blocked[t.utask_id] = std::move(t);
-        blocked_num++;
-    }
-
-    // RDMA 완료 시 깨우기 -- Master가 코루틴 깨우
-    bool wake_task(int uid)
-    {
-        auto it = blocked.find(uid);
-        if (it != blocked.end())
-        {
-            work_queue.push(std::move(it->second));
-            blocked.erase(it);
-            blocked_num--;
-            return true;
-        }
-        printf("[%d]wake_task wrong<%d>\n", thread_id, uid);
-        return false;
-    }
-
-    // 한 번에 wait_list -> work_queue로 옮기고, 한 개 코루틴을 실행
-    void schedule(){
-        // 1. Wait list -> Work Queue (대기중인 작업을 실행 큐로 옮김)
-        if (!wait_list.empty()) {
-            std::lock_guard<std::mutex> lock(mutex);
-            while (!wait_list.empty()) {
-                work_queue.push(std::move(wait_list.front()));
-                wait_list.pop();
-            }
-        }
-
-        // 2. Work Queue에 작업이 없으면 할 일이 없음
-        if (work_queue.empty()) {
-            return;
-        }
-
-        // 3. Work Queue에서 코루틴을 하나 꺼내 실행
-        Task task = std::move(work_queue.front());
-        work_queue.pop();
-
-        if (task.source && (*task.source)) {
-            (*task.source)(this); // 코루틴 실행
-        }
-
-        // 4. 코루틴이 아직 끝나지 않았다면 다시 큐에 넣어 다음 기회에 실행
-        if (!task.is_done()) {
-            work_queue.push(std::move(task));
-        }
-    }// void schedule()
-};
 // =====================
 // Sleep / Wake helpers
 // =====================
@@ -566,6 +385,17 @@ int core_consolidation(Scheduler &sched, int tid)
             route_tbl[s].owner.store(target, std::memory_order_release);
         }
     }
+    std::vector<int> my_shards;
+    for (int s = 0; s < NUM_SHARDS; ++s) {
+        if (route_tbl[s].owner.load() == tid) {
+            my_shards.push_back(s);
+        }
+    }
+    assert(my_shards.size()!=1);
+    int shards_to_move = my_shards.size();
+    for (int i = 0; i < shards_to_move; ++i) {
+        route_tbl[my_shards[i]].owner.store(target, std::memory_order_release);
+    }
 
     core_state[target] = CONSOLIDATED;
     return target;
@@ -598,7 +428,18 @@ int load_balancing(int from_tid, int to_tid)
         to_sched->wait_list.push(std::move(t));
         from_sched->work_queue.pop();
     }
-    
+    std::vector<int> my_shards;
+    for (int s = 0; s < NUM_SHARDS; ++s) {
+        if (route_tbl[s].owner.load() == from_tid) {
+            my_shards.push_back(s);
+        }
+    }
+    assert(my_shards.size()!=1);
+    int shards_to_move = my_shards.size() / 2;
+    for (int i = 0; i < shards_to_move; ++i) {
+        route_tbl[my_shards[i]].owner.store(to_tid, std::memory_order_release);
+    }
+
     return half;
 }
 
@@ -698,7 +539,7 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                     {
                         // 현재 work_queue의 코루틴이랑 실행전 request 싹 넘겼음
                         // 자기전에 대기중인 RDMA request 다 처리함
-                        while (sched.blocked_num > 0 || sched.rx_queue.size() > 0)
+                        while (sched.rx_queue.size() > 0)
                         {
                             sched.schedule();
                         }
@@ -716,7 +557,7 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                         core_state[tid] = CONSOLIDATED;
 
                         // 1) 남은 RDMA 완료를 너무 오래 돌지 않게 예산 한도 내에서만 처리
-                        while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
+                        while (sched.work_queue.empty()  || sched.rx_queue.size() > 0)
                         {
                             sched.schedule();
                         }
@@ -733,8 +574,9 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                     }
                 }
                 // 3-2) SLO 위반 시 잠자는 스레드 깨워 이관
-                else if (!g_stop.load() && sched.detect_SLO_violation_slice())
+                else if (!g_stop.load() && sched.detect_SLO_violation_slice()&&sched.shard_count!=1)
                 {
+                    // 3-2-0) 내가 shard 1개만 가지고 있으면 load balancing 못함;;
                     // printf("[%d]DetectSLOviolation\n",tid);
                     // 3-2-1) first, set my state to CONSOLIDATED to prevent consolidation
                     if (state_active_to_consol(tid))
@@ -784,118 +626,10 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
 
     // drain
     poll_owned_shards(sched, tid, req_buf);
-    while (sched.blocked_num > 0 || sched.work_queue.empty()  || sched.rx_queue.size() > 0)
+    while (sched.work_queue.empty()  || sched.rx_queue.size() > 0)
     {
         sched.schedule();
     }
     printf("[%d]Master ended\n",sched.thread_id);
 
 }
-
-// void thread_func(int tid, int coro_count)
-// {
-//     bind_cpu(tid);
-//     Scheduler sched(tid);
-//     master(sched, tid, coro_count);
-//     printf("Thread%dfinished\n", tid);
-// }
-// void timed_producer(int num_thread, int qps, int durationSec);
-
-// int main()
-// {
-//     std::thread thread_list[MAX_CORES];
-//     printf("RDMA Connection\n");
-//     for (int i = 0; i < MAX_CORES; i++)
-//     {
-//         thread_list[i] = std::thread(client_connection, 0, MAX_CORES, i);
-//     }
-//     for (int i = 0; i < MAX_CORES; i++)
-//     {
-//         thread_list[i].join();
-//     }
-
-//     for (int s = 0; s < NUM_SHARDS; ++s) {
-//         route_tbl[s].owner.store(s, std::memory_order_relaxed); // 샤드 s의 오너 = 스레드 s
-//         route_tbl[s].epoch.store(0, std::memory_order_relaxed);
-//     }
-
-//     printf("Start\n");
-//     const int coro_count = 10;  // 워커 코루틴 수
-//     const int num_thread = 2;   // 워커 스레드 수
-//     const int durationSec = 10; // 실험 시간 (초)
-//     const int qps = 500000;     // 초당 요청 개수
-
-//     // sleeping_flags 초기화
-//     for (int i = 0; i < num_thread; i++)
-//         sleeping_flags[i] = false;
-//     for (int i = num_thread; i < MAX_CORES; i++)
-//         sleeping_flags[i] = true;
-
-//     // 프로듀서 시작 (T초/QPS)
-//     std::thread producer(timed_producer, num_thread, qps, durationSec);
-//     for (int i = num_thread; i < MAX_CORES; i++)
-//     {
-//         thread_list[i] = std::thread(thread_func, i, coro_count);
-//     }
-//     sleep(1);
-//     // 시간 측정
-//     uint64_t now = std::time(nullptr);
-//     printf("===============Start time : %lu ==============\n", now);
-//     // 워커 시작
-//     for (int i = 0; i < num_thread; i++)
-//     {
-//         thread_list[i] = std::thread(thread_func, i, coro_count);
-//     }
-
-//     // 프로듀서 종료 대기
-//     producer.join();
-//     now = std::time(nullptr);
-//     printf("===============End time : %lu ================\n", now);
-//     // 잠든 master 깨우기
-//     wake_all_threads(num_thread);
-//     // 워커 조인
-//     for (int i = 0; i < MAX_CORES; i++)
-//     {
-//         if (thread_list[i].joinable())
-//             thread_list[i].join();
-//     }
-
-//     return 0;
-// }
-
-// void timed_producer(int num_thread, int qps, int durationSec)
-// {
-//     bind_cpu(num_thread);
-
-//     using clock = std::chrono::steady_clock;
-//     auto start = clock::now();
-//     auto deadline = start + std::chrono::seconds(durationSec);
-
-//     // 한 요청 간격
-//     auto period = std::chrono::nanoseconds(1'000'000'000LL / std::max(1, qps));
-//     auto next = start;
-
-//     uint64_t k = 1;
-//     while (!g_stop.load() && clock::now() < deadline)
-//     {
-//         Request r;
-//         r.type = OP_PUT; // OP_PUT/GET/DELETE/RANGE/UPDATE 중 하나
-//         r.key = k++;
-//         r.value = k * 10;
-//         r.start_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
-//                            clock::now().time_since_epoch())
-//                            .count();
-//         // [당신의 현재 g_rx는 mutex 기반이라 실패 반환이 없음]
-//         int shard = r.key % NUM_SHARDS;
-//         int owner = route_tbl[shard].owner.load(std::memory_order_acquire);
-
-//         g_rx.push(std::move(r));
-
-//         // 다음 발사 시각까지 대기 (드리프트 최소화)
-//         next += period;
-//         std::this_thread::sleep_until(next);
-//     }
-
-//     // 실험 타임업 → 종료 신호
-//     g_stop.store(true);
-// }
