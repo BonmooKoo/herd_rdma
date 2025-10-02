@@ -1,3 +1,9 @@
+#include <iostream>
+#include <thread>
+#include <atomic>
+#include <getopt.h>
+#include <vector>
+
 extern "C" {
   #include "hrd.h"
   #include "main.h"
