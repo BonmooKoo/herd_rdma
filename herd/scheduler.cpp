@@ -1,22 +1,3 @@
-#include <boost/coroutine/symmetric_coroutine.hpp>
-#include <iostream>
-#include <thread>
-#include <vector>
-#include <queue>
-#include <deque>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <cassert>
-#include <sys/syscall.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <cmath>
-#include <unordered_map>
-#include <cinttypes>
-
 //Config
 #include "main.h"
 #include "scheduler_defs.h"
