@@ -99,7 +99,7 @@ void* run_client(void* arg) {
   /* Some tracking info */
   int ws[MAX_CORES] = {0}; /* Window slot to use for a worker */
 
-  struct mica_op* req_buf = memalign(4096, sizeof(*req_buf));
+  struct mica_op* req_buf = static_cast<struct mica_op*>(memalign(4096, sizeof(*req_buf)));
   assert(req_buf != NULL);
 
   struct ibv_send_wr wr, *bad_send_wr;
@@ -158,7 +158,7 @@ void* run_client(void* arg) {
     }
 
     wn = hrd_fastrand(&seed) % MAX_CORES; /* Choose a worker */
-    int is_update = (hrd_fastrand(&seed) % 100 < update_percentage) ? 1 : 0;
+    int is_update = (static_cast<int>(hrd_fastrand(&seed) % 100) < update_percentage) ? 1 : 0;
 
     /* Forge the HERD request */
     key_i = hrd_fastrand(&seed) % HERD_NUM_KEYS; /* Choose a key */
