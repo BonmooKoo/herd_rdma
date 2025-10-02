@@ -4,7 +4,6 @@
 #include <boost/coroutine/symmetric_coroutine.hpp>
 
 extern std::atomic<bool> g_stop;
-extern Route route_tbl[MAX_CORES];
 
 // 샤드 소유권 테이블 구조체 (C++ 스타일)
 struct Route {
