@@ -1,6 +1,8 @@
-#include "hrd.h"
-#include "main.h"
-#include "mica.h"
+extern "C" {
+  #include "hrd.h"
+  #include "main.h"
+  #include "mica.h"
+}
 
 #define DGRAM_BUF_SIZE 4096
 
