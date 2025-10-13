@@ -4,10 +4,10 @@
 CPPFLAGS := -I ../libhrd/ -I ../mica/
 
 # C 전용 플래그에 공용 플래그를 추가
-CFLAGS   := -O3 -Wall -Werror -Wno-unused-result $(CPPFLAGS)
+CFLAGS   := -g -O3 -Wall -Werror -Wno-unused-result $(CPPFLAGS)
 
 # C++ 전용 플래그를 새로 만들고 공용 플래그를 추가
-CXXFLAGS := -O3 -Wall -Werror -Wno-unused-result $(CPPFLAGS)
+CXXFLAGS := -g -O3 -Wall -Werror -Wno-unused-result $(CPPFLAGS)
 
 # 링커 및 링커 플래그
 LD       := g++

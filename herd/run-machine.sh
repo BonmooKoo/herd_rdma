@@ -22,11 +22,12 @@ num_threads=10		# Threads per client machine
 
 blue "Running $num_threads client threads"
 
-sudo numactl --cpunodebind=0 --membind=0 ./main \
+#sudo gdb --args numactl --cpunodebind=0 --membind=0 ./main \
+sudo gdb --args ./main \
 	--num-threads $num_threads \
 	--base-port-index 0 \
 	--num-server-ports 1 \
 	--num-client-ports 1 \
 	--is-client 1 \
 	--update-percentage 0 \
-	--machine-id $1 &
+	--machine-id $1 
