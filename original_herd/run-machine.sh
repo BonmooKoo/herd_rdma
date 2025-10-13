@@ -18,7 +18,7 @@ fi
 blue "Removing hugepages"
 shm-rm.sh 1>/dev/null 2>/dev/null
 
-num_threads=10		# Threads per client machine
+num_threads=10	# Threads per client machine
 
 blue "Running $num_threads client threads"
 
@@ -29,4 +29,4 @@ sudo numactl --cpunodebind=0 --membind=0 ./main \
 	--num-client-ports 1 \
 	--is-client 1 \
 	--update-percentage 0 \
-	--machine-id $1 
+	--machine-id $1 &
