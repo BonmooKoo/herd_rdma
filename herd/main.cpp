@@ -127,7 +127,11 @@ int main(int argc, char* argv[]) {
       param_arr[i].postlist = postlist;
       if (is_client) {
           // ... (client param setup)
-          
+          param_arr[i].id = (machine_id * num_threads) + i;
+          param_arr[i].base_port_index = base_port_index;
+          param_arr[i].num_server_ports = num_server_ports;
+          param_arr[i].num_client_ports = num_client_ports;
+          param_arr[i].update_percentage = update_percentage;
           // 2. threads.emplace_back으로 스레드 생성 및 시작
           threads.emplace_back(run_client, &param_arr[i]);
       } else { // is_client == 0
