@@ -101,11 +101,15 @@ class MPMCQueue
 public:
     bool try_pop(Request &out)
     {
+	printf("try_pop\n");
         std::lock_guard<std::mutex> lk(m_);
+	printf("lock_guard\n");
         if (q_.empty())
             return false;
+	printf("Queue\n");
         out = std::move(q_.front());
         q_.pop_front();
+	printf("try_pop_end\n");
         return true;
     }
     void push(Request &&r)
@@ -278,7 +282,7 @@ public:
     
     // 한 번에 wait_list -> work_queue로 옮기고, 한 개 코루틴을 실행
     void schedule(){
-        // 1. Wait list -> Work Queue (대기중인 작업을 실행 큐로 옮김)
+	// 1. Wait list -> Work Queue (대기중인 작업을 실행 큐로 옮김)
         if (!wait_list.empty()) {
             std::lock_guard<std::mutex> lock(mutex);
             while (!wait_list.empty()) {
@@ -287,11 +291,13 @@ public:
             }
         }
 
+        printf("scheduler1\n");
         // 2. Work Queue에 작업이 없으면 할 일이 없음
         if (work_queue.empty()) {
             return;
         }
 
+        printf("scheduler2-%lu\n",work_queue.size());
         // 3. Work Queue에서 코루틴을 하나 꺼내 실행
         Task task = std::move(work_queue.front());
         work_queue.pop();
@@ -300,6 +306,7 @@ public:
             (*task.source)(this); // 코루틴 실행
         }
 
+        printf("scheduler3\n");
         // 4. 코루틴이 아직 끝나지 않았다면 다시 큐에 넣어 다음 기회에 실행
         if (!task.is_done()) {
             work_queue.push(std::move(task));
@@ -620,11 +627,12 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 
         while (true) {
             if (!current->rx_queue.try_pop(r)) {
-                yield();
+                printf("No request %d-%d\n",lwid,coroid);fflush(stdout);
+		yield();
                 current = yield.get();
                 continue;
             }
-
+	    printf("Coroutine\n");
             volatile struct mica_op* req = &req_buf[r.req_buf_offset];
             req->opcode -= HERD_MICA_OFFSET;
             op_ptr_arr[0] = (struct mica_op*)req;
@@ -643,7 +651,7 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
             wr.wr.ud.remote_qpn = clt_qp[clt_i]->qpn;
             wr.wr.ud.remote_qkey = HRD_DEFAULT_QKEY;
             wr.opcode = IBV_WR_SEND_WITH_IMM;
-            wr.imm_data = lwid; // ★★ 논리적 워커 ID 사용 ★★
+            wr.imm_data = lwid;
             wr.num_sge = 1;
             wr.sg_list = &sgl;
             wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
@@ -658,6 +666,7 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 }
 
 void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_buf) {
+    printf("Master_loop started\n");
     if (sleeping_flags[tid]) {
         core_state[tid] = SLEEPING;
         sleep_thread(tid);
@@ -667,10 +676,11 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
     int sched_count = 0;
     while (!g_stop.load())
     {
+	printf("sched\n");
         sched.schedule();//RDMA poll & start coroutine
         if (++sched_count >= SCHEDULING_TICK)
         {
-            // printf("[%d]Status=%d\n",tid,core_state[tid].load());
+            printf("[%d]Status=%d\n",tid,core_state[tid].load());
             sched_count = 0;
             // 3-0) CONSOLIDATED/SLEEPING/STARTED -> ACTIVE
             if (core_state[tid] == SLEEPING || core_state[tid] == CONSOLIDATED || core_state[tid] == STARTED)
@@ -686,7 +696,7 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                 // 3-1) 저부하이면 코어 정리 (core 0은 제외)
                 if (sched.is_idle() && tid != 0)
                 {
-                    // printf("Core[%d] idle\n", tid);
+                    printf("Core[%d] idle\n", tid);
                     int cc = core_consolidation(sched, tid);
                     // printf("Core[%d] cc:%d\n", tid, cc);
                     if (cc >= 0)
@@ -731,7 +741,7 @@ void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_bu
                 else if (!g_stop.load() && sched.detect_SLO_violation_slice()&&sched.shard_count!=1)
                 {
                     // 3-2-0) 내가 shard 1개만 가지고 있으면 load balancing 못함;;
-                    // printf("[%d]DetectSLOviolation\n",tid);
+                    printf("[%d]DetectSLOviolation\n",tid);
                     // 3-2-1) first, set my state to CONSOLIDATED to prevent consolidation
                     if (state_active_to_consol(tid))
                     {
