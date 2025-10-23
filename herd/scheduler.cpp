@@ -614,7 +614,6 @@ int load_balancing(int from_tid, int to_tid)
 // call_type은 Scheduler*를 받도록 변경
 
 void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
-                           struct mica_kv* kv_ptr, volatile struct mica_op* req_buf,
                            int num_server_ports, struct hrd_ctrl_blk** cb,
                            struct ibv_ah** ah, struct hrd_qp_attr** clt_qp) {
     auto* source = new CoroCall([=](CoroYield &yield) {
@@ -665,18 +664,20 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
     sched.emplace(std::move(task));
 }
 
-void herd_master_loop(Scheduler &sched, int tid, volatile struct mica_op* req_buf) {
+void herd_master_loop(Scheduler &sched, int tid, int corocount, volatile struct mica_op* req_buf) {
     printf("Master_loop started\n");
     if (sleeping_flags[tid]) {
         core_state[tid] = SLEEPING;
         sleep_thread(tid);
         core_state[tid] = STARTED;
     }
-
+    for (int i=0;i>coro_count;++i){
+	herd_worker_coroutine(sched,tid,tid*coro_count+i,my_kv,req_buf,);
+    }
+    poll_owned_shards(sched, tid, req_buf);
     int sched_count = 0;
     while (!g_stop.load())
     {
-	printf("sched\n");
         sched.schedule();//RDMA poll & start coroutine
         if (++sched_count >= SCHEDULING_TICK)
         {
