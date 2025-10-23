@@ -85,17 +85,14 @@ void* run_worker(void* arg) {
 
   // 전역 MICA 배열에서 내 논리적 ID에 해당하는 인스턴스 포인터 가져오기
   struct mica_kv* my_kv = &kv_instances[wrkr_lid];
-
+/*
   // 초기 워커 코루틴 생성
   const int coro_count = MAX_CORES; // 스레드 당 worker코루틴 수
-  for (int i = 0; i < coro_count; ++i) {
-      printf("[%d]_Create coroutine %d\n",wrkr_lid,i); 
       herd_worker_coroutine(sched, wrkr_lid, wrkr_lid * coro_count + i,
                             my_kv, req_buf, params.num_server_ports,
                             cb, ah, clt_qp);
   }
-
-  printf("Worker %d: Starting scheduler loop.\n", wrkr_lid);
+*/
   herd_master_loop(sched, wrkr_lid, req_buf);
 
   return NULL;
