@@ -1,0 +1,2 @@
+set exec-wrapper numactl --cpunodebind=0 --membind=0
+set args --is-client 0 --base-port-index 0 --num-server-ports 1 --postlist 10

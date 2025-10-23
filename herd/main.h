@@ -31,7 +31,7 @@
 /* Configuration options */
 #define MAX_SERVER_PORTS 4
 #define MAX_CORES 8  /* Number of Core that can be activated */
-#define NUM_CLIENTS 10 /* Number of Client Thread */
+#define NUM_CLIENTS 4 /* Number of Client Thread */
 #define NUM_CORO 10    /* Number of Worker Coroutine */
 
 /* Performance options */

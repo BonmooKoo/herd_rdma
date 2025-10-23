@@ -18,7 +18,7 @@ fi
 blue "Removing hugepages"
 shm-rm.sh 1>/dev/null 2>/dev/null
 
-num_threads=10		# Threads per client machine
+num_threads=4		# Threads per client machine
 
 blue "Running $num_threads client threads"
 

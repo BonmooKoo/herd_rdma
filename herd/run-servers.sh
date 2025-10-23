@@ -34,6 +34,7 @@ sudo numactl --cpunodebind=0 --membind=0 ./main \
 # Give the master process time to create and register per-port request regions
 sleep 1
 sudo gdb ./main
+exit
 blue "Starting worker threads"
 sudo numactl --cpunodebind=0 --membind=0 \
 	./main \
