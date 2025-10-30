@@ -683,10 +683,34 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
             wr.num_sge = 1;
             wr.sg_list = &sgl;
             wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
-            
-            ibv_post_send(cb[cb_i]->dgram_qp[ud_qp_i], &wr, &bad_send_wr);
-            current->record_latency(r.start_time);
-        }
+            // ==========================================================
+            // ★★ 1. NULL 포인터 체크 (Assert 추가) ★★
+            // ==========================================================
+            // 만약 이 포인터 중 하나라도 NULL이면, 프로그램이 여기서 즉시 멈춥니다.
+            assert(cb[cb_i] != nullptr && "Error: cb[cb_i] is NULL");
+            assert(cb[cb_i]->dgram_qp[ud_qp_i] != nullptr && "Error: dgram_qp is NULL");
+            assert(ah[clt_i] != nullptr && "Error: ah[clt_i] is NULL");
+            assert(clt_qp[clt_i] != nullptr && "Error: clt_qp[clt_i] is NULL");
+            assert(sgl.addr != 0 && "Error: sgl.addr is NULL (from MICA)");
+
+
+            // ==========================================================
+            // ★★ 2. ibv_post_send 반환 값 체크 (핵심) ★★
+            // ==========================================================
+            int ret = ibv_post_send(cb[cb_i]->dgram_qp[ud_qp_i], &wr, &bad_send_wr);
+
+            if (ret != 0) {
+                // ibv_post_send가 0이 아닌 값을 반환하면 "실패"한 것입니다.
+                printf("[%d-%d] !!! ibv_post_send FAILED! ret = %d, errno = %d (%s) !!!\n",
+                       lwid, coroid, ret, errno, strerror(errno));
+                fflush(stdout);
+            } else {
+                // 성공한 경우에만 레이턴시 기록
+                current->record_latency(r.start_time);
+            }
+            // ==========================================================
+        	
+	}
     });
 
     Task task(source, lwid, coroid);
