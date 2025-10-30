@@ -704,7 +704,7 @@ void herd_master_loop(Scheduler &sched, int tid, int corocount, volatile struct 
 	herd_worker_coroutine(sched,tid,tid*coro_count+i,my_kv,req_buf,);
     }
 */
-    while(sched.rx_queue.size()!=0){
+    while(sched.rx_queue.size()==0){
 	//wait for first request come
 	poll_owned_shards(sched, tid, req_buf);
     }
@@ -729,6 +729,7 @@ int sched_count = 0;
             }
             else if (core_state[tid] == ACTIVE)
             {
+		continue;
                 // 3-1) 저부하이면 코어 정리 (core 0은 제외)
                 if (sched.is_idle() && tid != 0)
                 {
