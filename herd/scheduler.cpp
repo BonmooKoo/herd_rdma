@@ -291,7 +291,7 @@ public:
         if (work_queue.empty()) {
             return;
         }
-        printf("scheduler%d-%lu\n",thread_id,work_queue.size());
+        //printf("scheduler%d-%lu\n",thread_id,work_queue.size());
         // 3. Work Queue에서 코루틴을 하나 꺼내 실행
         Task task = std::move(work_queue.front());
         work_queue.pop();
@@ -405,7 +405,7 @@ int post_mycoroutines_to(int from_tid, int to_tid)
             }
         }
     }
-    printf("[%d]Polled %d request\n",my_tid,poll_count);
+  //  printf("[%d]Polled %d request\n",my_tid,poll_count);
 }*/
 
 static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
@@ -438,7 +438,7 @@ static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile stru
             }
         }
     }
-    printf("[%d]Polled %d request\n",my_tid,poll_count);
+ //   printf("[%d]Polled %d request\n",my_tid,poll_count);
 }
 
 int sched_load(int c)
@@ -656,7 +656,7 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 
         while (true) {
             if (!current->rx_queue.try_pop(r)) {
-                printf("No request %d-%d\n",current->thread_id,coroid);fflush(stdout);
+                //printf("No request %d-%d\n",current->thread_id,coroid);fflush(stdout);
 		yield();
                 current = yield.get();
                 continue;
@@ -694,7 +694,7 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 }
 
 void herd_master_loop(Scheduler &sched, int tid, int corocount, volatile struct mica_op* req_buf) {
-    printf("Master_loop[%d] started\n",tid);
+    printf("Master_loop[%d] created\n",tid);
     if (sleeping_flags[tid]) {
         core_state[tid] = SLEEPING;
         sleep_thread(tid);
@@ -704,14 +704,19 @@ void herd_master_loop(Scheduler &sched, int tid, int corocount, volatile struct 
 	herd_worker_coroutine(sched,tid,tid*coro_count+i,my_kv,req_buf,);
     }
 */
-    poll_owned_shards(sched, tid, req_buf);
-    int sched_count = 0;
+    while(sched.rx_queue.size()!=0){
+	//wait for first request come
+	poll_owned_shards(sched, tid, req_buf);
+    }
+    printf("Master_loop[%d] started\n",tid);
+
+int sched_count = 0;
     while (!g_stop.load())
     {
         sched.schedule();//RDMA poll & start coroutine
         if (++sched_count >= SCHEDULING_TICK)
         {
-            printf("[%d]Status=%d\n",tid,core_state[tid].load());
+            //printf("[%d]Status=%d\n",tid,core_state[tid].load());
             sched_count = 0;
             // 3-0) CONSOLIDATED/SLEEPING/STARTED -> ACTIVE
             if (core_state[tid] == SLEEPING || core_state[tid] == CONSOLIDATED || core_state[tid] == STARTED)
