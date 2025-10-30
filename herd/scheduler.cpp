@@ -101,15 +101,11 @@ class MPMCQueue
 public:
     bool try_pop(Request &out)
     {
-	printf("try_pop\n");
         std::lock_guard<std::mutex> lk(m_);
-	printf("lock_guard\n");
         if (q_.empty())
             return false;
-	printf("Queue\n");
         out = std::move(q_.front());
         q_.pop_front();
-	printf("try_pop_end\n");
         return true;
     }
     void push(Request &&r)
@@ -291,13 +287,11 @@ public:
             }
         }
 
-        printf("scheduler1\n");
         // 2. Work Queue에 작업이 없으면 할 일이 없음
         if (work_queue.empty()) {
             return;
         }
-
-        printf("scheduler2-%lu\n",work_queue.size());
+        printf("scheduler%d-%lu\n",thread_id,work_queue.size());
         // 3. Work Queue에서 코루틴을 하나 꺼내 실행
         Task task = std::move(work_queue.front());
         work_queue.pop();
@@ -306,7 +300,6 @@ public:
             (*task.source)(this); // 코루틴 실행
         }
 
-        printf("scheduler3\n");
         // 4. 코루틴이 아직 끝나지 않았다면 다시 큐에 넣어 다음 기회에 실행
         if (!task.is_done()) {
             work_queue.push(std::move(task));
@@ -385,9 +378,11 @@ int post_mycoroutines_to(int from_tid, int to_tid)
 //     // printf("[%d]Pulled%d\n",sched.thread_id,cnt);
 // }
 // Herd의 요청을 폴링하여 스케줄러 큐에 넣는 함수
-static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
+/*static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
     static int ws[NUM_CLIENTS] = {0};
     const int BURST_SIZE = 16;
+    printf("Poll Shard\n");
+    int poll_count=0;
     for (int shard_id = 0; shard_id < NUM_SHARDS; ++shard_id) {
         if (route_tbl[shard_id].owner.load(std::memory_order_acquire) == my_tid) {
             int clt_i = shard_id;
@@ -401,7 +396,7 @@ static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile stru
                     r.req_buf_offset = req_offset;
                     r.client_id = clt_i;
                     r.start_time = now_ns();
-
+                    poll_count++;
                     sched.rx_queue.push(std::move(r));
                     HRD_MOD_ADD(ws[clt_i], WINDOW_SIZE); // 다음 슬롯으로 이동
                 } else {
@@ -410,6 +405,40 @@ static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile stru
             }
         }
     }
+    printf("[%d]Polled %d request\n",my_tid,poll_count);
+}*/
+
+static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
+    static int ws[MAX_CORES][NUM_CLIENTS] = {{0}}; 
+    int poll_count=0;
+    // 1. 내가 담당하는 샤드(0~7)를 순회
+    for (int shard_id = 0; shard_id < NUM_SHARDS; ++shard_id) {
+        if (route_tbl[shard_id].owner.load(std::memory_order_acquire) == my_tid) {
+            
+            // 2. 이 샤드에 요청을 보낼 수 있는 "모든" 클라이언트(0~3)를 순회
+            for (int client_id = 0; client_id < NUM_CLIENTS; ++client_id) {
+                
+                // 3. (shard_id, client_id) 쌍에 대해 요청을 확인
+                int window_slot = ws[shard_id][client_id];
+                int req_offset = OFFSET(shard_id, client_id, window_slot);
+
+                if (req_buf[req_offset].opcode >= HERD_OP_GET) {
+                    Request r;
+                    r.type = req_buf[req_offset].opcode;
+                    r.key = req_buf[req_offset].key.bkt;
+                    r.req_buf_offset = req_offset;
+                    r.start_time = now_ns();
+                    poll_count++;
+                    sched.rx_queue.push(std::move(r));
+                    r.client_id = client_id; // <-- 올바른 client_id 사용
+                    ws[shard_id][client_id] = (ws[shard_id][client_id] + 1) % WINDOW_SIZE;
+                } else {
+                    break; 
+                }
+            }
+        }
+    }
+    printf("[%d]Polled %d request\n",my_tid,poll_count);
 }
 
 int sched_load(int c)
@@ -614,6 +643,7 @@ int load_balancing(int from_tid, int to_tid)
 // call_type은 Scheduler*를 받도록 변경
 
 void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
+                           struct mica_kv* kv_ptr, volatile struct mica_op* req_buf,
                            int num_server_ports, struct hrd_ctrl_blk** cb,
                            struct ibv_ah** ah, struct hrd_qp_attr** clt_qp) {
     auto* source = new CoroCall([=](CoroYield &yield) {
@@ -626,12 +656,11 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 
         while (true) {
             if (!current->rx_queue.try_pop(r)) {
-                printf("No request %d-%d\n",lwid,coroid);fflush(stdout);
+                printf("No request %d-%d\n",current->thread_id,coroid);fflush(stdout);
 		yield();
                 current = yield.get();
                 continue;
             }
-	    printf("Coroutine\n");
             volatile struct mica_op* req = &req_buf[r.req_buf_offset];
             req->opcode -= HERD_MICA_OFFSET;
             op_ptr_arr[0] = (struct mica_op*)req;
@@ -665,15 +694,16 @@ void herd_worker_coroutine(Scheduler &sched, int lwid, int coroid,
 }
 
 void herd_master_loop(Scheduler &sched, int tid, int corocount, volatile struct mica_op* req_buf) {
-    printf("Master_loop started\n");
+    printf("Master_loop[%d] started\n",tid);
     if (sleeping_flags[tid]) {
         core_state[tid] = SLEEPING;
         sleep_thread(tid);
         core_state[tid] = STARTED;
     }
-    for (int i=0;i>coro_count;++i){
+/*    for (int i=0;i>coro_count;++i){
 	herd_worker_coroutine(sched,tid,tid*coro_count+i,my_kv,req_buf,);
     }
+*/
     poll_owned_shards(sched, tid, req_buf);
     int sched_count = 0;
     while (!g_stop.load())

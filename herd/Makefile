@@ -11,7 +11,7 @@ CXXFLAGS := -g -O3 -Wall -Werror -Wno-unused-result $(CPPFLAGS)
 
 # 링커 및 링커 플래그
 LD       := g++
-LDFLAGS  := -libverbs -lrt -lpthread -lmemcached -lnuma -lboost_system -lboost_coroutine -lboost_context
+LDFLAGS  := -L/usr/local/lib -Wl,-rpath,/usr/local/lib -libverbs -lrt -lpthread -lmemcached -lnuma -lboost_system -lboost_coroutine -lboost_context
 
 # --- 이 아래는 그대로 둡니다 ---
 APPS     := main
