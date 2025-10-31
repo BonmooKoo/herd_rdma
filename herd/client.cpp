@@ -160,7 +160,7 @@ void* run_client(void* arg) {
     if (nb_tx % WINDOW_SIZE == 0 && nb_tx > 0) {
       hrd_poll_cq(cb->dgram_recv_cq[0], WINDOW_SIZE, wc);
       //클라이언트가 서버에 보냈던 WINDOW_SIZE 갯수의 요청들에 대해 몇개의 응답이 도착하였는가?
-
+	//서버가 보낸 request 가져오기
     }
 
     wn = hrd_fastrand(&seed) % MAX_CORES; /* Choose a worker */

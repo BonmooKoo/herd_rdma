@@ -380,7 +380,7 @@ int post_mycoroutines_to(int from_tid, int to_tid)
 // Herd의 요청을 폴링하여 스케줄러 큐에 넣는 함수
 /*static inline void poll_owned_shards(Scheduler &sched, int my_tid, volatile struct mica_op* req_buf) {
     static int ws[NUM_CLIENTS] = {0};
-    const int BURST_SIZE = 16;
+    const int BURST_SIZE = 32;//==same as WINDOW_SIZE(=32)
     printf("Poll Shard\n");
     int poll_count=0;
     for (int shard_id = 0; shard_id < NUM_SHARDS; ++shard_id) {
